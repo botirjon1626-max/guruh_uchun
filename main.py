@@ -25,7 +25,7 @@ from telegram.ext import (
 # BMAX HELP BOT
 # ============================================================
 
-BOT_NAME = "BMAX HELP BOT"
+BOT_NAME = "BMAX_HELP_BOT"
 
 # Bot username @ belgisiz yoziladi
 BOT_USERNAME = "BMAX_HELP_BOT"
