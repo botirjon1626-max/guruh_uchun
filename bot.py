@@ -36,10 +36,6 @@ OWNER_IDS = {
     if x.strip().isdigit()
 }
 
-if not BOT_TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN Environment Variable topilmadi."
-    )
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
