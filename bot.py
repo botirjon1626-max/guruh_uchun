@@ -1,9 +1,7 @@
-import os
-import re
-import time
-import sqlite3
 import logging
-from collections import defaultdict, deque
+import re
+import sqlite3
+import time
 
 from telegram import (
     Update,
@@ -22,43 +20,38 @@ from telegram.ext import (
     filters,
 )
 
-# =========================
-# SOZLAMALAR
-# =========================
+# ============================================================
+# BMAX HELP BOT
+# 1-QISM
+# ============================================================
 
-BOT_TOKEN = os.getenv("8834635778:AAERGiDkJ8Qa_iiqdTtq_9bXIGcfOQ1p2ds", "").strip()
+# TOKENNI SHU YERGA O'Z TOKENINGIZNI YOZING
+BOT_TOKEN = "8834635778:AAERGiDkJ8Qa_iiqdTtq_9bXIGcfOQ1p2ds"
 
-# Render Environment:
-# OWNER_IDS=8892671978,5940450585
+# BOT EGALARI ID'LARI
 OWNER_IDS = {
-    int(x.strip())
-    for x in os.getenv("OWNER_IDS", "").split(",")
-    if x.strip().isdigit()
+    8892671978,
+    5940450585,
 }
-
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-logger = logging.getLogger(__name__)
-
-# =========================
+# ============================================================
 # DATABASE
-# =========================
+# ============================================================
 
 db = sqlite3.connect(
     "bmax_help_bot.db",
     check_same_thread=False
 )
 
-db.execute("PRAGMA journal_mode=WAL")
-
 db.execute("""
 CREATE TABLE IF NOT EXISTS groups (
     chat_id INTEGER PRIMARY KEY,
-    title TEXT DEFAULT '',
+    title TEXT,
     rules TEXT DEFAULT 'Guruh qoidalariga rioya qiling.'
 )
 """)
@@ -106,7 +99,7 @@ CREATE TABLE IF NOT EXISTS muted (
 db.execute("""
 CREATE TABLE IF NOT EXISTS advertisements (
     id INTEGER PRIMARY KEY,
-    text TEXT DEFAULT '',
+    text TEXT,
     photo_id TEXT,
     enabled INTEGER DEFAULT 0
 )
@@ -118,20 +111,11 @@ CREATE TABLE IF NOT EXISTS used_groups (
 )
 """)
 
-db.execute("""
-CREATE TABLE IF NOT EXISTS private_users (
-    user_id INTEGER PRIMARY KEY,
-    name TEXT DEFAULT '',
-    username TEXT DEFAULT '',
-    started INTEGER DEFAULT 1
-)
-""")
-
 db.commit()
 
-# =========================
-# FILTRLAR
-# =========================
+# ============================================================
+# SO'KINISH FILTRI
+# ============================================================
 
 BAD_WORDS = {
     "ahmoq",
@@ -167,28 +151,15 @@ URL_RE = re.compile(
     re.IGNORECASE
 )
 
-# 8 soniyada 6 tadan ko'p xabar = flood
-flood_cache = defaultdict(deque)
-
-FLOOD_LIMIT = 6
-FLOOD_SECONDS = 8
-
-pending_mutes = {}
-ad_waiting = set()
-
-# =========================
+# ============================================================
 # YORDAMCHI FUNKSIYALAR
-# =========================
+# ============================================================
 
 def ensure_group(chat):
-
     db.execute(
         """
-        INSERT OR IGNORE INTO groups(
-            chat_id,
-            title
-        )
-        VALUES(?,?)
+        INSERT OR IGNORE INTO groups(chat_id, title)
+        VALUES (?, ?)
         """,
         (
             chat.id,
@@ -198,38 +169,16 @@ def ensure_group(chat):
 
     db.execute(
         """
-        UPDATE groups
-        SET title=?
-        WHERE chat_id=?
+        INSERT OR IGNORE INTO used_groups(chat_id)
+        VALUES (?)
         """,
-        (
-            chat.title or "",
-            chat.id
-        )
-    )
-
-    db.execute(
-        """
-        INSERT OR IGNORE INTO used_groups(
-            chat_id
-        )
-        VALUES(?)
-        """,
-        (
-            chat.id,
-        )
+        (chat.id,)
     )
 
     db.commit()
 
 
-def ensure_user(
-    chat,
-    user,
-    increment=False,
-    joined=0
-):
-
+def ensure_user(chat, user):
     db.execute(
         """
         INSERT OR IGNORE INTO users(
@@ -237,18 +186,15 @@ def ensure_user(
             user_id,
             name,
             username,
-            messages,
-            joined,
-            left
+            messages
         )
-        VALUES(?,?,?,?,0,?,0)
+        VALUES (?, ?, ?, ?, 0)
         """,
         (
             chat.id,
             user.id,
             user.full_name,
-            user.username or "",
-            joined
+            user.username or ""
         )
     )
 
@@ -257,16 +203,13 @@ def ensure_user(
         UPDATE users
         SET name=?,
             username=?,
-            messages=messages+?,
-            joined=joined+?
+            messages=messages+1
         WHERE chat_id=?
         AND user_id=?
         """,
         (
             user.full_name,
             user.username or "",
-            1 if increment else 0,
-            joined,
             chat.id,
             user.id
         )
@@ -275,46 +218,13 @@ def ensure_user(
     db.commit()
 
 
-def ensure_private_user(user):
-
-    db.execute(
-        """
-        INSERT OR REPLACE INTO private_users(
-            user_id,
-            name,
-            username,
-            started
-        )
-        VALUES(?,?,?,1)
-        """,
-        (
-            user.id,
-            user.full_name,
-            user.username or ""
-        )
-    )
-
-    db.commit()
-
-
-async def is_admin(
-    update,
-    context,
-    user_id=None
-):
-
+async def check_admin(update, context, user_id=None):
     chat = update.effective_chat
 
-    if not chat:
-        return False
-
     if user_id is None:
-
-        if update.effective_user:
-            user_id = update.effective_user.id
+        user_id = update.effective_user.id
 
     try:
-
         member = await context.bot.get_chat_member(
             chat.id,
             user_id
@@ -322,19 +232,14 @@ async def is_admin(
 
         return member.status in (
             ChatMemberStatus.ADMINISTRATOR,
-            ChatMemberStatus.OWNER,
+            ChatMemberStatus.OWNER
         )
 
     except Exception:
-
         return False
 
 
-def get_warn(
-    chat_id,
-    user_id
-):
-
+def get_warn(chat_id, user_id):
     row = db.execute(
         """
         SELECT count
@@ -351,15 +256,13 @@ def get_warn(
     return row[0] if row else 0
 
 
-def add_warn(
-    chat_id,
-    user_id
-):
-
-    count = get_warn(
+def add_warn(chat_id, user_id):
+    old = get_warn(
         chat_id,
         user_id
-    ) + 1
+    )
+
+    new = old + 1
 
     db.execute(
         """
@@ -368,25 +271,21 @@ def add_warn(
             user_id,
             count
         )
-        VALUES(?,?,?)
+        VALUES (?, ?, ?)
         """,
         (
             chat_id,
             user_id,
-            count
+            new
         )
     )
 
     db.commit()
 
-    return count
+    return new
 
 
-def clear_warn(
-    chat_id,
-    user_id
-):
-
+def clear_warn(chat_id, user_id):
     db.execute(
         """
         DELETE FROM warns
@@ -403,10 +302,11 @@ def clear_warn(
 
 
 def contains_bad_word(text):
+    text = text.lower()
 
     words = re.findall(
         r"[a-zA-Zа-яА-ЯёЁўқғҳʻʼ']+",
-        text.lower()
+        text
     )
 
     return any(
@@ -416,19 +316,15 @@ def contains_bad_word(text):
 
 
 def parse_duration(value):
-
-    match = re.fullmatch(
-        r"(\d+)(min|m|h|d)",
+    match = re.match(
+        r"^(\d+)(min|m|h|d)$",
         value.lower()
     )
 
     if not match:
         return None
 
-    number = int(
-        match.group(1)
-    )
-
+    number = int(match.group(1))
     unit = match.group(2)
 
     if unit in ("min", "m"):
@@ -444,7 +340,6 @@ def parse_duration(value):
 
 
 def duration_text(seconds):
-
     if seconds < 3600:
         return f"{seconds // 60} daqiqa"
 
@@ -454,155 +349,158 @@ def duration_text(seconds):
     return f"{seconds // 86400} kun"
 
 
-async def mute_user(
-    context,
-    chat_id,
-    user_id,
-    seconds
-):
+# ============================================================
+# /START
+# ============================================================
 
-    await context.bot.restrict_chat_member(
-        chat_id=chat_id,
-        user_id=user_id,
-        permissions=ChatPermissions(
-            can_send_messages=False
-        ),
-        until_date=int(
-            time.time() + seconds
-        )
-    )
-
-
-async def unmute_user(
-    context,
-    chat_id,
-    user_id
-):
-
-    await context.bot.restrict_chat_member(
-        chat_id=chat_id,
-        user_id=user_id,
-        permissions=ChatPermissions(
-            can_send_messages=True,
-            can_send_audios=True,
-            can_send_documents=True,
-            can_send_photos=True,
-            can_send_videos=True,
-            can_send_video_notes=True,
-            can_send_voice_notes=True,
-            can_send_polls=True,
-            can_send_other_messages=True,
-            can_add_web_page_previews=True
-        )
-    )
-
-
-# =========================
-# START
-# =========================
-
-async def start(
-    update,
-    context
-):
-
-    user = update.effective_user
-
-    if user:
-        ensure_private_user(user)
-
-    bot_username = (
-        context.bot.username or ""
-    )
-
+async def start(update, context):
     keyboard = InlineKeyboardMarkup([
-
         [
             InlineKeyboardButton(
-                "📖 Help",
+                "🆘 HELP",
                 callback_data="help"
-            ),
-
-            InlineKeyboardButton(
-                "🛡 Funksiyalar",
-                callback_data="features"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "➕ Guruhga qo'shish",
                 url=(
-                    f"https://t.me/"
-                    f"{bot_username}"
-                    f"?startgroup=true"
+                    "https://t.me/"
+                    + context.bot.username
+                    + "?startgroup=true"
                 )
             )
         ],
-
         [
             InlineKeyboardButton(
-                "📜 Qoidalar",
-                callback_data="bot_rules"
+                "ℹ️ Bot haqida",
+                callback_data="about"
             )
         ]
-
     ])
 
     await update.message.reply_text(
-
-        "🤖 BMAX HELP BOT\n\n"
-
-        "Guruhingizni himoya qilish va "
-        "boshqarish uchun meni guruhga "
-        "qo'shing va ADMIN qiling.\n\n"
-
-        "👇 Kerakli bo'limni tanlang:",
-
-        reply_markup=keyboard
+        "🛡 <b>BMAX HELP BOT</b>\n\n"
+        "Assalomu alaykum! 👋\n"
+        "Men Telegram guruhlarini boshqarish "
+        "va himoya qilish uchun yaratilgan botman.\n\n"
+        "🛡 Guruh himoyasi\n"
+        "🚫 So'kinish filtri\n"
+        "🔗 Havola/reklama nazorati\n"
+        "⚠️ Warn tizimi\n"
+        "🔇 Mute\n"
+        "🔨 Ban\n"
+        "👢 Kick\n"
+        "🤖 CAPTCHA\n"
+        "📊 Statistika\n"
+        "📜 Qoidalar\n\n"
+        "Quyidagi tugmalardan foydalaning:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
     )
 
 
-async def help_command(
-    update,
-    context
-):
+# ============================================================
+# HELP / ABOUT CALLBACK
+# ============================================================
 
-    await update.message.reply_text(
+async def start_callback(update, context):
+    query = update.callback_query
 
-        "📖 BMAX HELP BOT — YORDAM\n\n"
+    await query.answer()
 
-        "👤 Oddiy foydalanuvchi:\n"
-        "/start — bosh menyu\n"
-        "/help — yordam\n"
-        "/id — ID ko'rish\n"
-        "/info — profil ma'lumoti\n\n"
+    if query.data == "help":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🔙 Orqaga",
+                    callback_data="back_start"
+                )
+            ]
+        ])
 
-        "👮 Admin:\n"
-        "/panel — admin panel\n"
-        "/rules — guruh qoidalari\n"
-        "/stats — statistika\n"
-        "/warn — warn\n"
-        "/unwarn — warnni tozalash\n"
-        "/ban — ban\n"
-        "/kick — kick\n"
-        ".mute 10min sabab — mute\n\n"
+        await query.edit_message_text(
+            "🆘 <b>BMAX HELP BOT — YORDAM</b>\n\n"
+            "👮 Admin komandalar:\n"
+            "/panel — Admin panel\n"
+            "/ban — Ban qilish\n"
+            "/kick — Guruhdan chiqarish\n"
+            "/warn — Warn berish\n"
+            "/unwarn — Warnni tozalash\n"
+            ".mute 10min sabab — Mute\n"
+            "/info — Foydalanuvchi ma'lumoti\n"
+            "/id — ID ko'rish\n"
+            "/rules — Guruh qoidalari\n"
+            "/stats — Statistika\n\n"
+            "📢 Bot egasi:\n"
+            "/reklama — Reklama yuborish tizimi",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
 
-        "🔐 Himoya:\n"
-        "CAPTCHA, havola bloklash, "
-        "so'kinish filtri va flood nazorati."
-    )
+    elif query.data == "about":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🔙 Orqaga",
+                    callback_data="back_start"
+                )
+            ]
+        ])
+
+        await query.edit_message_text(
+            "ℹ️ <b>BMAX HELP BOT</b>\n\n"
+            "🛡 Guruhlarni himoya qilish va "
+            "boshqarish uchun yordamchi bot.\n\n"
+            "🐍 Python Telegram Bot\n"
+            "🇺🇿 O'zbekcha interfeys\n"
+            "🔒 CAPTCHA\n"
+            "⚠️ Warn tizimi\n"
+            "📊 Statistika\n"
+            "📢 Reklama tizimi",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+
+    elif query.data == "back_start":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "🆘 HELP",
+                    callback_data="help"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "➕ Guruhga qo'shish",
+                    url=(
+                        "https://t.me/"
+                        + context.bot.username
+                        + "?startgroup=true"
+                    )
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "ℹ️ Bot haqida",
+                    callback_data="about"
+                )
+            ]
+        ])
+
+        await query.edit_message_text(
+            "🛡 <b>BMAX HELP BOT</b>\n\n"
+            "Kerakli bo'limni tanlang:",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
 
 
-# =========================
-# YANGI A'ZOLAR / CAPTCHA
-# =========================
+# ============================================================
+# YANGI A'ZO / CAPTCHA
+# ============================================================
 
-async def new_members(
-    update,
-    context
-):
-
+async def new_members(update, context):
     message = update.message
 
     if not message:
@@ -617,19 +515,10 @@ async def new_members(
         if user.is_bot:
             continue
 
-        ensure_user(
-            chat,
-            user,
-            joined=1
-        )
-
         try:
-
             await context.bot.restrict_chat_member(
-
                 chat.id,
                 user.id,
-
                 permissions=ChatPermissions(
                     can_send_messages=False
                 )
@@ -641,7 +530,7 @@ async def new_members(
                     chat_id,
                     user_id
                 )
-                VALUES(?,?)
+                VALUES (?, ?)
                 """,
                 (
                     chat.id,
@@ -649,47 +538,50 @@ async def new_members(
                 )
             )
 
+            db.execute(
+                """
+                INSERT OR IGNORE INTO users(
+                    chat_id,
+                    user_id,
+                    name,
+                    username,
+                    joined
+                )
+                VALUES (?, ?, ?, ?, 1)
+                """,
+                (
+                    chat.id,
+                    user.id,
+                    user.full_name,
+                    user.username or ""
+                )
+            )
+
             db.commit()
 
             keyboard = InlineKeyboardMarkup([
-
                 [
                     InlineKeyboardButton(
                         "✅ Men bot emasman",
                         callback_data=(
-                            f"captcha:"
-                            f"{chat.id}:"
-                            f"{user.id}"
+                            f"captcha:{chat.id}:{user.id}"
                         )
                     )
                 ]
-
             ])
 
             await message.reply_text(
-
-                f"👋 Salom, "
-                f"{user.full_name}!\n\n"
-
+                f"👋 Salom, {user.full_name}!\n\n"
                 "🔒 Guruhga yozish uchun "
-                "quyidagi tugmani bosing.",
-
+                "bot emasligingizni tasdiqlang.",
                 reply_markup=keyboard
             )
 
         except Exception as e:
-
-            logger.exception(
-                "CAPTCHA error: %s",
-                e
-            )
+            logging.error(e)
 
 
-async def captcha_button(
-    update,
-    context
-):
-
+async def captcha_button(update, context):
     query = update.callback_query
 
     await query.answer()
@@ -703,20 +595,28 @@ async def captcha_button(
     user_id = int(parts[2])
 
     if query.from_user.id != user_id:
-
         await query.answer(
             "❌ Bu tugma siz uchun emas.",
             show_alert=True
         )
-
         return
 
     try:
-
-        await unmute_user(
-            context,
+        await context.bot.restrict_chat_member(
             chat_id,
-            user_id
+            user_id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
         )
 
         db.execute(
@@ -734,56 +634,41 @@ async def captcha_button(
         db.commit()
 
         await query.edit_message_text(
-
-            f"✅ "
-            f"{query.from_user.full_name} "
-            "tasdiqlandi!\n"
-
+            f"✅ {query.from_user.full_name} "
+            "tasdiqlandi!\n\n"
             "Endi guruhda yozishingiz mumkin."
         )
 
     except Exception as e:
-
-        logger.exception(
-            "Captcha confirm error: %s",
-            e
-        )
+        logging.error(e)
 
         await query.answer(
-            "❌ Botni admin qiling.",
+            "❌ Bot admin ekanligini tekshiring.",
             show_alert=True
         )
 
 
-# =========================
+# ============================================================
 # CHAT MEMBER
-# =========================
+# ============================================================
 
-async def chat_member_update(
-    update,
-    context
-):
-
+async def chat_member_update(update, context):
     cm = update.chat_member
 
     if not cm:
         return
 
     chat = cm.chat
-
     user = cm.new_chat_member.user
-
-    ensure_group(chat)
 
     if cm.new_chat_member.status in (
         ChatMemberStatus.LEFT,
         ChatMemberStatus.BANNED
     ):
-
         db.execute(
             """
             UPDATE users
-            SET left=left+1
+            SET left=1
             WHERE chat_id=?
             AND user_id=?
             """,
@@ -796,39 +681,33 @@ async def chat_member_update(
         db.commit()
 
 
-# =========================
+# ============================================================
 # MODERATSIYA
-# =========================
+# ============================================================
 
-async def moderate(
-    update,
-    context
-):
-
+async def moderate(update, context):
     message = update.message
 
     if not message:
         return
 
     chat = message.chat
-
     user = message.from_user
 
+    if chat.type not in (
+        "group",
+        "supergroup"
+    ):
+        return
+
     ensure_group(chat)
+    ensure_user(chat, user)
 
-    ensure_user(
-        chat,
-        user,
-        increment=True
-    )
-
-    if await is_admin(
+    if await check_admin(
         update,
         context
     ):
         return
-
-    # CAPTCHA
 
     pending = db.execute(
         """
@@ -844,7 +723,6 @@ async def moderate(
     ).fetchone()
 
     if pending:
-
         try:
             await message.delete()
         except Exception:
@@ -852,73 +730,19 @@ async def moderate(
 
         return
 
-    text = message.text or ""
-
-    # FLOOD
-
-    now = time.time()
-
-    queue = flood_cache[
-        (chat.id, user.id)
-    ]
-
-    while (
-        queue
-        and
-        now - queue[0] > FLOOD_SECONDS
-    ):
-        queue.popleft()
-
-    queue.append(now)
-
-    if len(queue) > FLOOD_LIMIT:
-
-        try:
-
-            await message.delete()
-
-            await mute_user(
-                context,
-                chat.id,
-                user.id,
-                60
-            )
-
-            queue.clear()
-
-            await context.bot.send_message(
-
-                chat.id,
-
-                f"🔇 {user.full_name} "
-                "flood sababli "
-                "1 daqiqaga mute qilindi."
-            )
-
-        except Exception as e:
-
-            logger.exception(
-                "Flood error: %s",
-                e
-            )
-
+    if not message.text:
         return
 
-    # LINK / REKLAMA
+    text = message.text.lower()
 
     if URL_RE.search(text):
-
         try:
-
             await message.delete()
 
             await context.bot.send_message(
-
                 chat.id,
-
                 f"🔗 {user.full_name}, "
-                "guruhda reklama va "
-                "havolalar taqiqlangan!"
+                "guruhda reklama va havolalar taqiqlangan!"
             )
 
         except Exception:
@@ -926,12 +750,8 @@ async def moderate(
 
         return
 
-    # SO'KINISH
-
     if contains_bad_word(text):
-
         try:
-
             await message.delete()
 
             count = add_warn(
@@ -940,21 +760,22 @@ async def moderate(
             )
 
             await context.bot.send_message(
-
                 chat.id,
-
-                f"⚠️ {user.full_name}\n"
+                f"⚠️ {user.full_name}\n\n"
                 "🚫 So'kinish taqiqlangan.\n"
                 f"Warn: {count}/3"
             )
 
             if count >= 3:
-
-                await mute_user(
-                    context,
+                await context.bot.restrict_chat_member(
                     chat.id,
                     user.id,
-                    600
+                    permissions=ChatPermissions(
+                        can_send_messages=False
+                    ),
+                    until_date=int(
+                        time.time() + 600
+                    )
                 )
 
                 clear_warn(
@@ -963,56 +784,35 @@ async def moderate(
                 )
 
                 await context.bot.send_message(
-
                     chat.id,
-
                     f"🔇 {user.full_name} "
                     "3 ta warn sababli "
                     "10 daqiqaga mute qilindi."
                 )
 
         except Exception as e:
+            logging.error(e)
+# ============================================================
+# /ID
+# ============================================================
 
-            logger.exception(
-                "Bad word error: %s",
-                e
-            )
-
-
-# =========================
-# ID / INFO
-# =========================
-
-async def cmd_id(
-    update,
-    context
-):
-
+async def cmd_id(update, context):
     await update.message.reply_text(
-
-        f"👤 Sizning ID: "
-        f"{update.effective_user.id}\n"
-
-        f"👥 Chat ID: "
-        f"{update.effective_chat.id}"
+        f"👤 Sizning ID: {update.effective_user.id}\n"
+        f"👥 Guruh ID: {update.effective_chat.id}"
     )
 
 
-async def cmd_info(
-    update,
-    context
-):
+# ============================================================
+# /INFO
+# ============================================================
 
+async def cmd_info(update, context):
     message = update.message
 
     if message.reply_to_message:
-
-        user = (
-            message.reply_to_message.from_user
-        )
-
+        user = message.reply_to_message.from_user
     else:
-
         user = update.effective_user
 
     warn = get_warn(
@@ -1021,101 +821,67 @@ async def cmd_info(
     )
 
     await message.reply_text(
-
         f"👤 Ism: {user.full_name}\n"
         f"🆔 ID: {user.id}\n"
-        f"🔗 Username: "
-        f"@{user.username or 'yoq'}\n"
+        f"🔗 Username: @{user.username or 'yo‘q'}\n"
         f"⚠️ Warn: {warn}"
     )
 
 
-# =========================
-# BAN
-# =========================
+# ============================================================
+# /BAN
+# ============================================================
 
-async def cmd_ban(
-    update,
-    context
-):
-
+async def cmd_ban(update, context):
     message = update.message
 
-    if not await is_admin(
-        update,
-        context
-    ):
+    if not await check_admin(update, context):
         return
 
     if not message.reply_to_message:
-
         await message.reply_text(
-            "❗ Xabarga reply qilib "
-            "/ban yozing."
+            "❗ Foydalanuvchi xabariga reply qilib /ban yozing."
         )
-
         return
 
-    user = (
-        message.reply_to_message.from_user
-    )
+    user = message.reply_to_message.from_user
 
     try:
-
         await context.bot.ban_chat_member(
             message.chat.id,
             user.id
         )
 
         await message.reply_text(
-            f"🔨 {user.full_name} "
-            "ban qilindi."
+            f"🔨 {user.full_name} ban qilindi."
         )
 
     except Exception as e:
-
-        logger.exception(
-            "Ban error: %s",
-            e
-        )
-
+        logging.error(e)
         await message.reply_text(
             "❌ Ban qilishda xatolik."
         )
 
 
-# =========================
-# KICK
-# =========================
+# ============================================================
+# /KICK
+# ============================================================
 
-async def cmd_kick(
-    update,
-    context
-):
-
+async def cmd_kick(update, context):
     message = update.message
 
-    if not await is_admin(
-        update,
-        context
-    ):
+    if not await check_admin(update, context):
         return
 
     if not message.reply_to_message:
-
         await message.reply_text(
-            "❗ Xabarga reply qilib "
-            "/kick yozing."
+            "❗ Foydalanuvchi xabariga reply qilib /kick yozing."
         )
-
         return
 
-    user = (
-        message.reply_to_message.from_user
-    )
+    user = message.reply_to_message.from_user
 
     try:
-
         await context.bot.ban_chat_member(
             message.chat.id,
             user.id
@@ -1127,47 +893,30 @@ async def cmd_kick(
         )
 
         await message.reply_text(
-            f"👢 {user.full_name} "
-            "guruhdan chiqarildi."
+            f"👢 {user.full_name} guruhdan chiqarildi."
         )
 
     except Exception as e:
-
-        logger.exception(
-            "Kick error: %s",
-            e
-        )
+        logging.error(e)
 
 
-# =========================
-# WARN
-# =========================
+# ============================================================
+# /WARN
+# ============================================================
 
-async def cmd_warn(
-    update,
-    context
-):
-
+async def cmd_warn(update, context):
     message = update.message
 
-    if not await is_admin(
-        update,
-        context
-    ):
+    if not await check_admin(update, context):
         return
 
     if not message.reply_to_message:
-
         await message.reply_text(
-            "❗ Xabarga reply qilib "
-            "/warn yozing."
+            "❗ Foydalanuvchi xabariga reply qilib /warn yozing."
         )
-
         return
 
-    user = (
-        message.reply_to_message.from_user
-    )
+    user = message.reply_to_message.from_user
 
     count = add_warn(
         message.chat.id,
@@ -1175,22 +924,21 @@ async def cmd_warn(
     )
 
     await message.reply_text(
-
-        f"⚠️ {user.full_name} "
-        "ogohlantirildi.\n"
-
+        f"⚠️ {user.full_name} ogohlantirildi.\n"
         f"Warn: {count}/3"
     )
 
     if count >= 3:
-
         try:
-
-            await mute_user(
-                context,
+            await context.bot.restrict_chat_member(
                 message.chat.id,
                 user.id,
-                600
+                permissions=ChatPermissions(
+                    can_send_messages=False
+                ),
+                until_date=int(
+                    time.time() + 600
+                )
             )
 
             clear_warn(
@@ -1199,48 +947,32 @@ async def cmd_warn(
             )
 
             await message.reply_text(
-
                 f"🔇 {user.full_name} "
+                "3 ta warn sababli "
                 "10 daqiqaga mute qilindi."
             )
 
         except Exception as e:
-
-            logger.exception(
-                "Warn mute error: %s",
-                e
-            )
+            logging.error(e)
 
 
-# =========================
-# UNWARN
-# =========================
+# ============================================================
+# /UNWARN
+# ============================================================
 
-async def cmd_unwarn(
-    update,
-    context
-):
-
+async def cmd_unwarn(update, context):
     message = update.message
 
-    if not await is_admin(
-        update,
-        context
-    ):
+    if not await check_admin(update, context):
         return
 
     if not message.reply_to_message:
-
         await message.reply_text(
-            "❗ Xabarga reply qilib "
-            "/unwarn yozing."
+            "❗ Foydalanuvchi xabariga reply qilib /unwarn yozing."
         )
-
         return
 
-    user = (
-        message.reply_to_message.from_user
-    )
+    user = message.reply_to_message.from_user
 
     clear_warn(
         message.chat.id,
@@ -1248,37 +980,29 @@ async def cmd_unwarn(
     )
 
     await message.reply_text(
-
-        f"✅ {user.full_name} "
-        "warnlari tozalandi."
+        f"✅ {user.full_name} warnlari tozalandi."
     )
 
 
-# =========================
+# ============================================================
 # MUTE
-# =========================
+# ============================================================
 
-async def mute_command(
-    update,
-    context
-):
+pending_mutes = {}
 
+
+async def mute_command(update, context):
     message = update.message
 
-    if not await is_admin(
-        update,
-        context
-    ):
+    if not await check_admin(update, context):
         return
 
     if not message.reply_to_message:
-
         await message.reply_text(
-
-            "❗ Reply qiling:\n"
+            "❗ Foydalanuvchi xabariga reply qiling.\n\n"
+            "Misol:\n"
             ".mute 10min sabab"
         )
-
         return
 
     parts = message.text.split(
@@ -1286,119 +1010,78 @@ async def mute_command(
     )
 
     if len(parts) < 2:
-
         await message.reply_text(
-
-            "Misol:\n"
+            "❌ Misol:\n"
             ".mute 10min sabab"
         )
-
         return
 
-    seconds = parse_duration(
-        parts[1]
-    )
+    seconds = parse_duration(parts[1])
 
     if seconds is None:
-
         await message.reply_text(
-
-            "❌ Vaqt noto'g'ri.\n\n"
-
+            "❌ Vaqt noto‘g‘ri.\n\n"
             "Misollar:\n"
             ".mute 2min sabab\n"
             ".mute 30min sabab\n"
             ".mute 1h sabab\n"
             ".mute 2d sabab"
         )
-
         return
 
     reason = (
-
         parts[2]
         if len(parts) >= 3
-        else "Sabab ko'rsatilmagan"
+        else "Sabab ko‘rsatilmagan"
     )
 
-    user = (
-        message.reply_to_message.from_user
-    )
+    user = message.reply_to_message.from_user
 
     request_id = str(
         time.time_ns()
     )
 
     pending_mutes[request_id] = {
-
-        "chat_id":
-            message.chat.id,
-
-        "user_id":
-            user.id,
-
-        "name":
-            user.full_name,
-
-        "seconds":
-            seconds,
-
-        "reason":
-            reason
+        "chat_id": message.chat.id,
+        "user_id": user.id,
+        "name": user.full_name,
+        "seconds": seconds,
+        "reason": reason
     }
 
     keyboard = InlineKeyboardMarkup([
-
         [
-
             InlineKeyboardButton(
                 "✅ Tasdiqlash",
-                callback_data=(
-                    f"mute_yes:"
-                    f"{request_id}"
-                )
+                callback_data=f"mute_yes:{request_id}"
             ),
-
             InlineKeyboardButton(
                 "❌ Bekor qilish",
-                callback_data=(
-                    f"mute_no:"
-                    f"{request_id}"
-                )
+                callback_data=f"mute_no:{request_id}"
             )
-
         ]
-
     ])
 
     await message.reply_text(
-
-        f"🔇 MUTE SO'ROVI\n\n"
-
+        f"🔇 MUTE SO‘ROVI\n\n"
         f"👤 Ism: {user.full_name}\n"
-
-        f"⏱ Muddati: "
-        f"{duration_text(seconds)}\n"
-
+        f"⏱ Muddati: {duration_text(seconds)}\n"
         f"📝 Sababi: {reason}\n\n"
-
-        "👮 Tasdiqlaysizmi?",
-
+        "👮 Admin tasdiqlasinmi?",
         reply_markup=keyboard
     )
 
 
-async def mute_callback(
-    update,
-    context
-):
-
+async def mute_callback(update, context):
     query = update.callback_query
 
     parts = query.data.split(":")
 
-    action = parts[0]
+    if len(parts) != 2:
+        await query.answer()
+        return
 
+    action = parts[0]
     request_id = parts[1]
 
     data = pending_mutes.get(
@@ -1406,29 +1089,24 @@ async def mute_callback(
     )
 
     if not data:
-
         await query.answer(
-            "❌ So'rov eskirgan.",
+            "❌ So‘rov eskirgan.",
             show_alert=True
         )
-
         return
 
-    if not await is_admin(
+    if not await check_admin(
         update,
         context,
         query.from_user.id
     ):
-
         await query.answer(
-            "❌ Faqat admin.",
+            "❌ Faqat admin tasdiqlashi mumkin.",
             show_alert=True
         )
-
         return
 
     if action == "mute_no":
-
         pending_mutes.pop(
             request_id,
             None
@@ -1439,32 +1117,29 @@ async def mute_callback(
         )
 
         await query.answer()
-
         return
 
+    chat_id = data["chat_id"]
+    user_id = data["user_id"]
+    seconds = data["seconds"]
+    reason = data["reason"]
+    name = data["name"]
+
     try:
-
-        chat_id = data["chat_id"]
-
-        user_id = data["user_id"]
-
-        seconds = data["seconds"]
-
-        reason = data["reason"]
-
-        await mute_user(
-            context,
-            chat_id,
-            user_id,
-            seconds
-        )
-
         until_time = int(
             time.time() + seconds
         )
 
-        db.execute(
+        await context.bot.restrict_chat_member(
+            chat_id,
+            user_id,
+            permissions=ChatPermissions(
+                can_send_messages=False
+            ),
+            until_date=until_time
+        )
 
+        db.execute(
             """
             INSERT OR REPLACE INTO muted(
                 chat_id,
@@ -1472,9 +1147,8 @@ async def mute_callback(
                 until_time,
                 reason
             )
-            VALUES(?,?,?,?)
+            VALUES (?, ?, ?, ?)
             """,
-
             (
                 chat_id,
                 user_id,
@@ -1486,34 +1160,21 @@ async def mute_callback(
         db.commit()
 
         keyboard = InlineKeyboardMarkup([
-
             [
-
                 InlineKeyboardButton(
                     "🔊 Mutedan chiqarish",
                     callback_data=(
-                        f"unmute:"
-                        f"{chat_id}:"
-                        f"{user_id}"
+                        f"unmute:{chat_id}:{user_id}"
                     )
                 )
-
             ]
-
         ])
 
         await query.edit_message_text(
-
             f"🔇 MUTE\n\n"
-
-            f"👤 Ism: "
-            f"{data['name']}\n"
-
-            f"⏱ Muddati: "
-            f"{duration_text(seconds)}\n"
-
+            f"👤 Ism: {name}\n"
+            f"⏱ Muddati: {duration_text(seconds)}\n"
             f"📝 Sababi: {reason}",
-
             reply_markup=keyboard
         )
 
@@ -1527,11 +1188,7 @@ async def mute_callback(
         )
 
     except Exception as e:
-
-        logger.exception(
-            "Mute error: %s",
-            e
-        )
+        logging.error(e)
 
         await query.answer(
             "❌ Mute qilishda xatolik.",
@@ -1539,48 +1196,57 @@ async def mute_callback(
         )
 
 
-async def unmute_callback(
-    update,
-    context
-):
+# ============================================================
+# UNMUTE
+# ============================================================
 
+async def unmute_callback(update, context):
     query = update.callback_query
 
     parts = query.data.split(":")
 
-    chat_id = int(parts[1])
+    if len(parts) != 3:
+        await query.answer()
+        return
 
+    chat_id = int(parts[1])
     user_id = int(parts[2])
 
-    if not await is_admin(
+    if not await check_admin(
         update,
         context,
         query.from_user.id
     ):
-
         await query.answer(
             "❌ Faqat admin.",
             show_alert=True
         )
-
         return
 
     try:
-
-        await unmute_user(
-            context,
+        await context.bot.restrict_chat_member(
             chat_id,
-            user_id
+            user_id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_audios=True,
+                can_send_documents=True,
+                can_send_photos=True,
+                can_send_videos=True,
+                can_send_video_notes=True,
+                can_send_voice_notes=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
         )
 
         db.execute(
-
             """
             DELETE FROM muted
             WHERE chat_id=?
             AND user_id=?
             """,
-
             (
                 chat_id,
                 user_id
@@ -1590,8 +1256,7 @@ async def unmute_callback(
         db.commit()
 
         await query.edit_message_text(
-            "🔊 Foydalanuvchi "
-            "mutedan chiqarildi."
+            "🔊 Foydalanuvchi mutedan chiqarildi."
         )
 
         await query.answer(
@@ -1599,11 +1264,7 @@ async def unmute_callback(
         )
 
     except Exception as e:
-
-        logger.exception(
-            "Unmute error: %s",
-            e
-        )
+        logging.error(e)
 
         await query.answer(
             "❌ Xatolik.",
@@ -1611,355 +1272,192 @@ async def unmute_callback(
         )
 
 
-# =========================
-# RULES
-# =========================
+# ============================================================
+# /RULES
+# ============================================================
 
-async def cmd_rules(
-    update,
-    context
-):
+async def cmd_rules(update, context):
+    chat = update.effective_chat
 
-    chat_id = (
-        update.effective_chat.id
-    )
-
-    ensure_group(
-        update.effective_chat
-    )
+    ensure_group(chat)
 
     row = db.execute(
-
         """
         SELECT rules
         FROM groups
         WHERE chat_id=?
         """,
-
-        (
-            chat_id,
-        )
+        (chat.id,)
     ).fetchone()
 
     rules = (
         row[0]
         if row
-        else "Qoidalar yo'q."
+        else "Qoidalar yo‘q."
     )
 
     await update.message.reply_text(
-
         "📜 GURUH QOIDALARI\n\n"
         + rules
     )
 
 
-# =========================
-# STATS
-# =========================
+# ============================================================
+# /STATS
+# ============================================================
 
-async def cmd_stats(
-    update,
-    context
-):
-
-    chat_id = (
-        update.effective_chat.id
-    )
+async def cmd_stats(update, context):
+    chat_id = update.effective_chat.id
 
     try:
-
-        members = (
-            await context.bot
-            .get_chat_member_count(
-                chat_id
-            )
+        members = await context.bot.get_chat_member_count(
+            chat_id
         )
-
     except Exception:
-
-        members = "Noma'lum"
+        members = "Noma’lum"
 
     row = db.execute(
-
         """
         SELECT COUNT(*),
-               COALESCE(
-                   SUM(messages),0
-               ),
-               COALESCE(
-                   SUM(joined),0
-               ),
-               COALESCE(
-                   SUM(left),0
-               )
+               COALESCE(SUM(messages), 0),
+               COALESCE(SUM(joined), 0),
+               COALESCE(SUM(left), 0)
         FROM users
         WHERE chat_id=?
         """,
-
-        (
-            chat_id,
-        )
+        (chat_id,)
     ).fetchone()
 
+    users = row[0]
+    messages = row[1]
+    joined = row[2]
+    left = row[3]
+
     await update.message.reply_text(
-
         "📊 GURUH STATISTIKASI\n\n"
-
         f"👥 A'zolar: {members}\n"
-
-        f"👤 Kuzatilganlar: "
-        f"{row[0]}\n"
-
-        f"💬 Xabarlar: "
-        f"{row[1]}\n"
-
-        f"🟢 Kirganlar: "
-        f"{row[2]}\n"
-
-        f"🔴 Chiqib ketganlar: "
-        f"{row[3]}"
+        f"👤 Kuzatilganlar: {users}\n"
+        f"💬 Xabarlar: {messages}\n"
+        f"🟢 Kirganlar: {joined}\n"
+        f"🔴 Chiqib ketganlar: {left}"
     )
 
 
-# =========================
-# PANEL
-# =========================
+# ============================================================
+# /PANEL
+# ============================================================
 
-async def cmd_panel(
-    update,
-    context
-):
-
-    if not await is_admin(
-        update,
-        context
-    ):
+async def cmd_panel(update, context):
+    if not await check_admin(update, context):
         return
 
     keyboard = InlineKeyboardMarkup([
-
         [
-
             InlineKeyboardButton(
                 "🛡 Himoya",
                 callback_data="panel_security"
             )
-
         ],
-
         [
-
             InlineKeyboardButton(
                 "📜 Qoidalar",
                 callback_data="panel_rules"
             )
-
         ],
-
         [
-
             InlineKeyboardButton(
                 "📊 Statistika",
                 callback_data="panel_stats"
             )
-
         ]
-
     ])
 
     await update.message.reply_text(
-
-        "⚙️ BMAX HELP BOT — "
-        "ADMIN PANEL\n\n"
-
-        "Bo'limni tanlang:",
-
+        "⚙️ ADMIN PANEL\n\n"
+        "Kerakli bo‘limni tanlang:",
         reply_markup=keyboard
     )
 
 
-async def panel_callback(
-    update,
-    context
-):
-
+async def panel_callback(update, context):
     query = update.callback_query
-
-    if not await is_admin(
-        update,
-        context,
-        query.from_user.id
-    ):
-
-        await query.answer(
-            "❌ Faqat admin.",
-            show_alert=True
-        )
-
-        return
 
     await query.answer()
 
     if query.data == "panel_security":
 
         await query.edit_message_text(
-
             "🛡 HIMOYA\n\n"
-
+            "✅ So‘kinish filtri\n"
+            "✅ Reklama va havola bloklash\n"
             "✅ CAPTCHA\n"
-            "✅ So'kinish filtri\n"
-            "✅ Reklama/havola bloklash\n"
-            "✅ Flood nazorati\n"
-            "✅ Warn / Ban / Kick / Mute"
+            "✅ Warn\n"
+            "✅ Ban\n"
+            "✅ Kick\n"
+            "✅ Mute"
         )
 
     elif query.data == "panel_rules":
 
         row = db.execute(
-
             """
             SELECT rules
             FROM groups
             WHERE chat_id=?
             """,
-
-            (
-                query.message.chat.id,
-            )
+            (query.message.chat.id,)
         ).fetchone()
 
+        rules = (
+            row[0]
+            if row
+            else "Qoidalar yo‘q."
+        )
+
         await query.edit_message_text(
-
             "📜 QOIDALAR\n\n"
-
-            + (
-                row[0]
-                if row
-                else "Qoidalar yo'q."
-            )
+            + rules
         )
 
     elif query.data == "panel_stats":
 
         await query.edit_message_text(
-
-            "📊 Statistikani ko'rish uchun:\n"
+            "📊 Statistikani ko‘rish uchun:\n"
             "/stats"
         )
 
 
-# =========================
-# START TUGMALARI
-# =========================
-
-async def general_callback(
-    update,
-    context
-):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    if query.data == "help":
-
-        await query.edit_message_text(
-
-            "📖 YORDAM\n\n"
-
-            "/start — bosh menyu\n"
-            "/help — yordam\n"
-            "/id — ID\n"
-            "/info — ma'lumot\n"
-            "/panel — admin panel\n"
-            "/rules — qoidalar\n"
-            "/stats — statistika"
-        )
-
-    elif query.data == "features":
-
-        await query.edit_message_text(
-
-            "🛡 BMAX HELP BOT\n\n"
-
-            "• CAPTCHA\n"
-            "• Havola/reklama bloklash\n"
-            "• So'kinish filtri\n"
-            "• Flood himoyasi\n"
-            "• Warn 3/3 → mute\n"
-            "• Ban / Kick\n"
-            "• Mute / Unmute\n"
-            "• Statistika"
-        )
-
-    elif query.data == "bot_rules":
-
-        await query.edit_message_text(
-
-            "📜 BOT QOIDASI\n\n"
-
-            "Botni guruhga qo'shgach "
-            "ADMIN qiling.\n\n"
-
-            "Shunda moderatsiya va "
-            "CAPTCHA ishlaydi."
-        )
-
-
-# =========================
+# ============================================================
 # REKLAMA
-# =========================
+# ============================================================
 
-async def cmd_reklama(
-    update,
-    context
-):
+ad_waiting = set()
 
-    user_id = (
-        update.effective_user.id
-    )
+
+async def cmd_reklama(update, context):
+    user_id = update.effective_user.id
 
     if user_id not in OWNER_IDS:
-
         await update.message.reply_text(
-            "❌ Bu buyruq faqat "
-            "bot egalari uchun."
+            "❌ Bu buyruq faqat bot egalari uchun."
         )
-
         return
 
-    ad_waiting.add(
-        user_id
-    )
+    ad_waiting.add(user_id)
 
     await update.message.reply_text(
-
-        "📢 Reklama yuboring.\n\n"
-
-        "Matn yoki rasm+caption.\n\n"
-
-        "Tasdiqlasangiz "
-        "BIR MARTA yuboriladi."
+        "📢 Reklama matnini yoki rasmini yuboring.\n\n"
+        "Keyin men sizdan tasdiqlashni so‘rayman."
     )
 
 
-async def receive_ad(
-    update,
-    context
-):
-
-    user_id = (
-        update.effective_user.id
-    )
+async def receive_ad(update, context):
+    user_id = update.effective_user.id
 
     if user_id not in OWNER_IDS:
         return
 
-    if (
-        update.effective_chat.type
-        != "private"
-    ):
+    if update.effective_chat.type != "private":
         return
 
     if user_id not in ad_waiting:
@@ -1971,12 +1469,9 @@ async def receive_ad(
     ):
         return
 
-    ad_waiting.remove(
-        user_id
-    )
+    ad_waiting.remove(user_id)
 
     text = (
-
         update.message.text
         or update.message.caption
         or ""
@@ -1985,15 +1480,11 @@ async def receive_ad(
     photo_id = None
 
     if update.message.photo:
-
         photo_id = (
-            update.message
-            .photo[-1]
-            .file_id
+            update.message.photo[-1].file_id
         )
 
     db.execute(
-
         """
         INSERT OR REPLACE INTO advertisements(
             id,
@@ -2001,9 +1492,8 @@ async def receive_ad(
             photo_id,
             enabled
         )
-        VALUES(1,?,?,0)
+        VALUES (1, ?, ?, 0)
         """,
-
         (
             text,
             photo_id
@@ -2013,51 +1503,33 @@ async def receive_ad(
     db.commit()
 
     keyboard = InlineKeyboardMarkup([
-
         [
-
             InlineKeyboardButton(
-                "❌ Bekor",
+                "❌ Bekor qilish",
                 callback_data="ad_no"
             ),
-
             InlineKeyboardButton(
-                "📢 1 MARTA YUBORISH",
+                "📢 Yuborish",
                 callback_data="ad_yes"
             )
-
         ]
-
     ])
 
     await update.message.reply_text(
-
-        "📣 Reklama tayyor.\n\n"
-
-        "Tasdiqlasangiz barcha "
-        "saqlangan guruhlarga va "
-        "/start yuborgan "
-        "foydalanuvchilarga "
-        "BIR MARTA yuboriladi.",
-
+        "📣 Reklama barcha ishlayotgan "
+        "guruhlar va foydalanuvchilarga yuborilsinmi?",
         reply_markup=keyboard
     )
 
 
-async def ad_callback(
-    update,
-    context
-):
-
+async def ad_callback(update, context):
     query = update.callback_query
 
     if query.from_user.id not in OWNER_IDS:
-
         await query.answer(
             "❌ Faqat bot egalari.",
             show_alert=True
         )
-
         return
 
     if query.data == "ad_no":
@@ -2073,195 +1545,119 @@ async def ad_callback(
         db.commit()
 
         await query.edit_message_text(
-            "❌ Reklama bekor qilindi."
+            "❌ Reklama yuborilmadi."
         )
 
         await query.answer()
-
         return
 
-    row = db.execute(
-
-        """
-        SELECT text, photo_id
-        FROM advertisements
-        WHERE id=1
-        """
-    ).fetchone()
-
-    if not row:
-
-        await query.answer(
-            "❌ Reklama topilmadi.",
-            show_alert=True
-        )
-
-        return
-
-    text, photo_id = row
-
-    await query.edit_message_text(
-
-        "⏳ Reklama yuborilmoqda...\n\n"
-
-        "Bu avtomatik har daqiqada "
-        "yuborilmaydi."
-    )
-
-    await query.answer()
-
-    groups = [
-
-        r[0]
-
-        for r in db.execute(
-            """
-            SELECT chat_id
-            FROM used_groups
-            """
-        ).fetchall()
-
-    ]
-
-    users = [
-
-        r[0]
-
-        for r in db.execute(
-            """
-            SELECT user_id
-            FROM private_users
-            """
-        ).fetchall()
-
-    ]
-
-    sent = 0
-    failed = 0
-
-    # GURUHLARGA
-    for chat_id in groups:
-
-        try:
-
-            if photo_id:
-
-                await context.bot.send_photo(
-
-                    chat_id=chat_id,
-
-                    photo=photo_id,
-
-                    caption=text or ""
-                )
-
-            elif text:
-
-                await context.bot.send_message(
-
-                    chat_id=chat_id,
-
-                    text=text
-                )
-
-            else:
-
-                failed += 1
-
-                continue
-
-            sent += 1
-
-        except Exception as e:
-
-            failed += 1
-
-            logger.warning(
-                "Ad group %s failed: %s",
-                chat_id,
-                e
-            )
-
-    # FOYDALANUVCHILARGA
-    for user_id in users:
-
-        try:
-
-            if photo_id:
-
-                await context.bot.send_photo(
-
-                    chat_id=user_id,
-
-                    photo=photo_id,
-
-                    caption=text or ""
-                )
-
-            elif text:
-
-                await context.bot.send_message(
-
-                    chat_id=user_id,
-
-                    text=text
-                )
-
-            else:
-
-                failed += 1
-
-                continue
-
-            sent += 1
-
-        except Exception as e:
-
-            failed += 1
-
-            logger.warning(
-                "Ad user %s failed: %s",
-                user_id,
-                e
-            )
-
-    # AVTOMATIK TAKRORLASH YO'Q
     db.execute(
-
         """
         UPDATE advertisements
-        SET enabled=0
+        SET enabled=1
         WHERE id=1
         """
     )
 
     db.commit()
 
-    try:
+    await query.edit_message_text(
+        "✅ Reklama tasdiqlandi.\n\n"
+        "📢 Endi yuborish mumkin."
+    )
 
-        await context.bot.send_message(
+    await query.answer()
 
-            query.from_user.id,
 
-            f"✅ Reklama yuborildi!\n\n"
+# ============================================================
+# REKLAMANI QO‘LDA YUBORISH
+# ============================================================
 
-            f"📨 Yetkazildi: {sent}\n"
+async def cmd_yubor(update, context):
+    user_id = update.effective_user.id
 
-            f"❌ Yuborilmadi: {failed}\n\n"
-
-            "🔁 Yana yuborish uchun "
-            "/reklama ni bosing."
+    if user_id not in OWNER_IDS:
+        await update.message.reply_text(
+            "❌ Bu buyruq faqat bot egalari uchun."
         )
+        return
 
-    except Exception:
-        pass
+    row = db.execute(
+        """
+        SELECT text, photo_id, enabled
+        FROM advertisements
+        WHERE id=1
+        """
+    ).fetchone()
+
+    if not row:
+        await update.message.reply_text(
+            "❌ Hozircha reklama tayyorlanmagan."
+        )
+        return
+
+    if row[2] != 1:
+        await update.message.reply_text(
+            "❌ Reklama tasdiqlanmagan.\n"
+            "Avval /reklama orqali reklama tayyorlang."
+        )
+        return
+
+    text = row[0]
+    photo_id = row[1]
+
+    groups = db.execute(
+        """
+        SELECT chat_id
+        FROM used_groups
+        """
+    ).fetchall()
+
+    sent = 0
+    failed = 0
+
+    for group in groups:
+        chat_id = group[0]
+
+        try:
+            if photo_id:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_id,
+                    caption=text or ""
+                )
+            elif text:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text
+                )
+
+            sent += 1
+
+        except Exception as e:
+            logging.error(
+                "Reklama yuborilmadi %s: %s",
+                chat_id,
+                e
+            )
+            failed += 1
+
+    await update.message.reply_text(
+        "📢 REKLAMA Yuborish YAKUNLANDI\n\n"
+        f"✅ Yuborildi: {sent}\n"
+        f"❌ Xatolik: {failed}"
+    )
 
 
-# =========================
+# ============================================================
 # MAIN
-# =========================
+# ============================================================
 
 def main():
+
+    if BOT_TOKEN == "BU_YERGA_BOT_TOKENINGIZNI_YOZING":
+        print("❌ BOT TOKENINI KIRITING!")
+        return
 
     app = (
         Application.builder()
@@ -2269,8 +1665,7 @@ def main():
         .build()
     )
 
-    # COMMANDLAR
-
+    # START
     app.add_handler(
         CommandHandler(
             "start",
@@ -2278,13 +1673,7 @@ def main():
         )
     )
 
-    app.add_handler(
-        CommandHandler(
-            "help",
-            help_command
-        )
-    )
-
+    # ASOSIY BUYRUQLAR
     app.add_handler(
         CommandHandler(
             "id",
@@ -2348,6 +1737,7 @@ def main():
         )
     )
 
+    # REKLAMA
     app.add_handler(
         CommandHandler(
             "reklama",
@@ -2355,148 +1745,115 @@ def main():
         )
     )
 
-    # YANGI A'ZOLAR
-
     app.add_handler(
+        CommandHandler(
+            "yubor",
+            cmd_yubor
+        )
+    )
 
+    # YANGI A'ZOLAR
+    app.add_handler(
         MessageHandler(
-
             filters.StatusUpdate.NEW_CHAT_MEMBERS,
-
             new_members
         )
     )
 
     # CHAT MEMBER
-
     app.add_handler(
-
         ChatMemberHandler(
-
             chat_member_update,
-
             ChatMemberHandler.CHAT_MEMBER
         )
     )
 
-    # .mute
-
+    # MUTE
     app.add_handler(
-
         MessageHandler(
-
             filters.Regex(
                 r"^\.mute(\s|$)"
             ),
-
             mute_command
         )
     )
 
     # CAPTCHA
-
     app.add_handler(
-
         CallbackQueryHandler(
-
             captcha_button,
-
             pattern=r"^captcha:"
         )
     )
 
-    # MUTE
-
+    # MUTE CALLBACK
     app.add_handler(
-
         CallbackQueryHandler(
-
             mute_callback,
-
             pattern=r"^mute_(yes|no):"
         )
     )
 
     # UNMUTE
-
     app.add_handler(
-
         CallbackQueryHandler(
-
             unmute_callback,
-
             pattern=r"^unmute:"
         )
     )
 
     # PANEL
-
     app.add_handler(
-
         CallbackQueryHandler(
-
             panel_callback,
-
             pattern=r"^panel_"
         )
     )
 
-    # REKLAMA
-
+    # START / HELP / ABOUT
     app.add_handler(
-
         CallbackQueryHandler(
+            start_callback,
+            pattern=r"^(help|about|back_start)$"
+        )
+    )
 
+    # REKLAMA
+    app.add_handler(
+        CallbackQueryHandler(
             ad_callback,
-
             pattern=r"^ad_(yes|no)$"
         )
     )
 
-    # START TUGMALARI
-
-    app.add_handler(
-
-        CallbackQueryHandler(
-
-            general_callback,
-
-            pattern=r"^(help|features|bot_rules)$"
-        )
-    )
-
     # PRIVATE REKLAMA
-
     app.add_handler(
-
         MessageHandler(
-
             filters.ChatType.PRIVATE
             & (
                 filters.TEXT
                 | filters.PHOTO
             ),
-
             receive_ad
         )
     )
 
-    # GROUP MODERATION
-
+    # GURUH MODERATSIYASI
     app.add_handler(
-
         MessageHandler(
-
             filters.ChatType.GROUPS
             & filters.TEXT,
-
             moderate
         )
     )
 
-    logger.info(
-        "BMAX HELP BOT ishga tushdi!"
-    )
+    print()
+    print("==============================")
+    print("🛡 BMAX HELP BOT")
+    print("🐍 Python Telegram Bot")
+    print("✅ Bot ishga tushdi!")
+    print("==============================")
+    print()
 
     app.run_polling(
         allowed_updates=Update.ALL_TYPES
@@ -2504,4 +1861,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main() 
